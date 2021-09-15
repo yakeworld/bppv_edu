@@ -1,0 +1,93 @@
+import re
+import numpy as np
+import SimpleITK as sitk
+import os
+pathlab = "D:/3d-unet/lab-out/"
+pathlabout = "D:/3d-unet/normal_lab_out/"
+path_ci3d="d:/3d-unet/dicom-out/"
+path_ci3dout="d:/3d-unet/normal/dicom_out/"
+path_crop="D:/3d-unet/normal/lab_margin/"
+path_stl_out="D:/3d-unet/normal/stl_out/"
+
+files= os.listdir(path_ci3dout) 
+
+
+
+PatientID='MR40338_ci3d.nii.gz' 
+print(PatientID)
+
+labname,number=re.subn(r"_ci3d.nii.gz", '_lab.nii.gz',PatientID)
+result, number = re.subn(r"_ci3d.nii.gz", '_lab.stl',PatientID)
+#result, number = re.subn(r"^MR0", 'MR',result)
+
+inputModelFile =path_stl_out + result 
+ci3dFile=path_ci3dout+PatientID  
+print(inputModelFile)
+#print("nice")
+slicer.mrmlScene.Clear(0)
+#inputModel = slicer.util.loadModel(inputModelFile,returnNode=True)#导入模型
+#ci3dData = slicer.util.loadVolume(ci3dFile,properties={},returnNode=True)  
+inputModel = slicer.util.loadModel(inputModelFile)#导入模型
+#ci3dData = slicer.util.loadVolume(ci3dFile )
+ci3dData = slicer.util.loadVolume(ci3dFile,properties={'center':True,'discardOrientation':True})
+
+inputData = getNode('*ci3d*')
+modeloutlinenode = slicer.util.getNode(slicer.mrmlScene.GetNthNodeByClass(3,'vtkMRMLModelNode').GetName())
+#bounds = np.zeros(6)
+#inputModel.GetBounds(bounds)
+seg = slicer.mrmlScene.AddNewNodeByClass('vtkMRMLSegmentationNode')
+seg.SetReferenceImageGeometryParameterFromVolumeNode(inputData)
+slicer.modules.segmentations.logic().ImportModelToSegmentationNode(modeloutlinenode, seg)
+seg.CreateBinaryLabelmapRepresentation()
+outputLabelmapVolumeNode = slicer.mrmlScene.AddNewNodeByClass('vtkMRMLLabelMapVolumeNode')
+slicer.modules.segmentations.logic().ExportVisibleSegmentsToLabelmapNode(seg, outputLabelmapVolumeNode, inputData)
+seg.CreateBinaryLabelmapRepresentation()
+outputLabelmapVolumeNode = slicer.mrmlScene.AddNewNodeByClass('vtkMRMLLabelMapVolumeNode')
+slicer.modules.segmentations.logic().ExportVisibleSegmentsToLabelmapNode(seg, outputLabelmapVolumeNode, inputData)
+#模型导入为lab存在不过，会产生一些碎片，需要进行模型清理
+segmentEditorWidget = slicer.qMRMLSegmentEditorWidget()
+segmentEditorWidget.setMRMLScene(slicer.mrmlScene)
+segmentEditorNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentEditorNode")
+segmentEditorWidget.setMRMLSegmentEditorNode(segmentEditorNode)
+segmentEditorWidget.setSegmentationNode(seg)
+segmentEditorWidget.setMasterVolumeNode(inputData)
+segmentEditorWidget.setActiveEffectByName("Islands")
+effect = segmentEditorWidget.activeEffect()
+effect.setParameter("Operation", "REMOVE_SMALL_ISLANDS")            
+effect.self().onApply()
+## 手工进行修正
+
+
+
+#导出为labmap  export visible segments to binary labelmap
+labelmapVolumeNode = slicer.mrmlScene.AddNewNodeByClass('vtkMRMLLabelMapVolumeNode')
+slicer.modules.segmentations.logic().ExportVisibleSegmentsToLabelmapNode(seg, labelmapVolumeNode, inputData)
+
+lab_data = slicer.util.arrayFromVolume(labelmapVolumeNode)
+ci3d_data=slicer.util.arrayFromVolume(inputData)
+lab_data=np.where(lab_data >0,ci3d_data,0)
+crop_name, number = re.subn(r"_lab.stl$", '_crop.nii.gz',result)
+crop_img=sitk.GetImageFromArray(lab_data)
+crop_img.SetSpacing(inputData.GetSpacing())
+crop_img.SetOrigin(inputData.GetOrigin())
+sitk.WriteImage(crop_img, path_crop+crop_name)
+nii_reader = vtk.vtkNIFTIImageReader()
+nii_reader.SetFileName(path_crop+crop_name)
+nii_reader.Update()
+
+threshold=90
+
+mc = vtk.vtkMarchingCubes()
+mc.SetInputConnection(nii_reader.GetOutputPort())
+#mc.SetInputData(image)
+mc.ComputeNormalsOn()
+mc.ComputeGradientsOn()
+mc.SetValue(0, threshold)
+mc.Update()
+
+stlWriter = vtk.vtkSTLWriter()
+stlWriter.SetFileName(path_stl_out+result)
+stlWriter.SetInputConnection(mc.GetOutputPort())
+#stlWriter.SetInputData()
+stlWriter.Write()       
+                
